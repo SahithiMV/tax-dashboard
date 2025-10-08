@@ -1,0 +1,10 @@
+{
+  "filing_status": "single",
+  "federal_st_rate": 0.37,
+  "federal_lt_rate": 0.15,
+  "state_code": "CA",
+  "state_st_rate": 0.093,
+  "state_lt_rate": 0.093,
+  "niit_rate": 0.0,
+  "carry_forward_losses": 0.0
+}

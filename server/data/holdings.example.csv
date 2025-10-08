@@ -1,0 +1,6 @@
+symbol,quantity,cost_per_share,purchase_date,account
+AAPL,15,138.42,2024-05-10,Fidelity
+NVDA,5,241.10,2025-03-01,Robinhood
+TSLA,8,185.00,2023-09-15,Schwab
+MSFT,10,360.00,2024-09-20,Schwab
+AMZN,7,120.00,2025-08-15,Fidelity

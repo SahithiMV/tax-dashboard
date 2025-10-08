@@ -1,0 +1,14 @@
+:root { color-scheme: light dark; }
+*{box-sizing:border-box} body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,'Helvetica Neue',Arial}
+.container{max-width:1100px;margin:0 auto;padding:24px}
+.grid{display:grid;gap:16px}
+.cards{grid-template-columns: repeat(3, 1fr)}
+.card{border:1px solid #e5e7eb;border-radius:12px;padding:16px;background:#fff}
+h1{font-size:22px;margin:0 0 12px}
+h2{font-size:16px;margin:0 0 8px}
+table{width:100%;border-collapse:collapse}
+th,td{padding:8px;border-bottom:1px solid #eee;text-align:left;font-size:14px}
+input,button,select{font-size:14px;padding:8px}
+button{cursor:pointer;border-radius:8px;border:1px solid #ddd;background:#f8f8f8}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.badge{padding:2px 6px;border-radius:6px;background:#f1f5f9;border:1px solid #e2e8f0}

@@ -13,7 +13,19 @@ export type LotResult = {
     est_tax_savings: number;
     days_to_lt: number;
   };
-  
+
+  // ---- Tax profile ----
+  export type TaxProfileIn = {
+    filing_status: "single" | "married_joint" | "married_separate" | "head";
+    federal_st_rate: number;
+    federal_lt_rate: number;
+    state_code: string;
+    state_st_rate: number;
+    state_lt_rate: number;
+    niit_rate: number;
+    carry_forward_losses: number;
+  };
+
   export type Summary = {
     pre_tax_value: number;
     total_unrealized_gain: number;

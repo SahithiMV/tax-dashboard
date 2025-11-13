@@ -136,6 +136,7 @@ async def estimate_tax_profile(body: TaxProfileEstimateIn, request: Request):
     completion = client.chat.completions.create(
         model=OPENAI_MODEL,
         response_format={"type": "json_object"},
+        temperature = 0.1,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_description},
@@ -556,6 +557,7 @@ async def agent_chat(body: AgentChatIn, request: Request):
     completion = client.chat.completions.create(
         model=OPENAI_MODEL,
         messages=messages,
+        temperature=0.3,
     )
 
     answer = completion.choices[0].message.content or "Sorry, I couldn't generate a response."

@@ -69,6 +69,26 @@ body{
 .select{ width:200px }
 .input:focus, .select:focus{ border-color:#3b82f6; box-shadow:0 0 0 3px rgba(62,130,246,.15) }
 
+/* Multiline textarea used in Smart tax profile setup */
+textarea.input {
+  height: auto;              /* override 40px height */
+  min-height: 80px;
+  padding: 10px 12px;        /* comfy padding */
+  line-height: 1.4;
+  resize: vertical;          /* let user drag bigger if needed */
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 14px;
+}
+
+/* Make placeholder readable and keep bullets/line breaks */
+textarea.input::placeholder {
+  color: var(--muted);
+  opacity: 0.9;
+  white-space: pre-line;
+}
+
+
 label.inline{ display:flex; align-items:center; gap:8px; color:var(--muted); font-size:14px }
 
 /* File input */
@@ -121,3 +141,16 @@ td.term{ text-transform:uppercase; letter-spacing:.04em; font-weight:700; color:
 /* What-if */
 .whatif{ display:flex; gap:10px; align-items:center; flex-wrap:wrap }
 .banner{ background:#231d0b; color:#ffe299; border:1px solid #5a4a16; padding:10px 12px; border-radius: var(--radius-xs); margin-top:10px }
+
+.card {
+  background:#141821;
+  border-radius: var(--radius);
+  border:1px solid var(--border);
+  padding:16px 18px;
+}
+
+.card-title {
+  margin:0 0 8px;
+  font-size:16px;
+  font-weight:600;
+}

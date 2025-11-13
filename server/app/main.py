@@ -1,9 +1,12 @@
 # server/app/main.py
-import io, csv, os
+import io, csv, os, json, httpx
 from datetime import date
 from typing import List, Dict
+from dotenv import load_dotenv
+from openai import OpenAI
 
-from fastapi import FastAPI, UploadFile, HTTPException, Query, Depends
+
+from fastapi import FastAPI, UploadFile, HTTPException, Query, Depends, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
@@ -13,7 +16,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.models import TaxProfileIn, QuoteUpsert
+from app.models import TaxProfileIn, QuoteUpsert, TaxProfileEstimateIn, TaxProfileEstimateOut
 from app.tax_engine import TaxProfile, Lot, estimate_lot, summarize, days_to_lt
 from app.db import User, TaxProfileDB, LotDB
 from app.quotes import get_quotes
@@ -40,6 +43,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+load_dotenv()
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+
+client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+
+
 # -----------------------
 # Helpers
 # -----------------------
@@ -61,6 +72,99 @@ def _load_profile(db: Session, user_id: int) -> TaxProfile:
         niit_rate=float(tp.niit_rate or 0.0),
         carry_forward_losses=float(tp.carry_forward_losses or 0.0),
     )
+
+class AgentChatIn(BaseModel):
+    message: str
+
+
+class AgentChatOut(BaseModel):
+    answer: str
+    
+
+@app.post("/api/tax_profile/estimate", response_model=TaxProfileEstimateOut)
+async def estimate_tax_profile(body: TaxProfileEstimateIn, request: Request):
+    """
+    Use OpenAI to estimate a reasonable TaxProfile based on simple answers.
+    This is an approximation for educational / simulation purposes only.
+    """
+    if not client:
+        # OpenAI client not configured
+        raise HTTPException(status_code=500, detail="AI not configured")
+
+    # Build a compact description for the model
+    desc_parts = []
+    if body.filing_status:
+        desc_parts.append(f"Filing status: {body.filing_status}")
+    if body.state_code:
+        desc_parts.append(f"State: {body.state_code}")
+    if body.income_band:
+        desc_parts.append(f"Income band: {body.income_band}")
+    if body.trading_style:
+        desc_parts.append(f"Trading style: {body.trading_style}")
+    if body.carry_forward_losses is not None:
+        desc_parts.append(f"Carry-forward losses: {body.carry_forward_losses}")
+    if body.extra_notes:
+        desc_parts.append(f"Extra notes: {body.extra_notes}")
+
+    user_description = "\n".join(desc_parts) or "User gave very little information."
+
+    system_prompt = (
+        "You are a tax modeling assistant for a portfolio simulator. "
+        "Given high-level info about a US taxpayer, you estimate reasonable, "
+        "rough marginal tax rates for short-term and long-term capital gains.\n\n"
+        "You must output STRICT JSON with this shape:\n"
+        "{\n"
+        '  "tax_profile": {\n'
+        '    "filing_status": "single|married_joint|married_separate|head",\n'
+        '    "federal_st_rate": 0.XX,\n'
+        '    "federal_lt_rate": 0.XX,\n'
+        '    "state_code": "CA",\n'
+        '    "state_st_rate": 0.XX,\n'
+        '    "state_lt_rate": 0.XX,\n'
+        '    "niit_rate": 0.XX,\n'
+        '    "carry_forward_losses": 1234.0\n'
+        "  },\n"
+        '  "explanation": "Short explanation in plain English"\n'
+        "}\n\n"
+        "Rules:\n"
+        "- Use decimal form for rates (0.35, not 35).\n"
+        "- If uncertain, pick a conservative mid-range estimate and say so in the explanation.\n"
+        "- Only model US federal and state; if state is missing, default state rates to 0.\n"
+        "- This is not tax advice, just a rough model for simulations."
+    )
+
+    completion = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_description},
+        ],
+    )
+
+    content = completion.choices[0].message.content
+    try:
+        obj = json.loads(content)
+    except json.JSONDecodeError:
+        # fallback: very basic defaults
+        fallback = {
+            "tax_profile": {
+                "filing_status": body.filing_status or "single",
+                "federal_st_rate": 0.32,
+                "federal_lt_rate": 0.15,
+                "state_code": (body.state_code or "CA").upper(),
+                "state_st_rate": 0.09,
+                "state_lt_rate": 0.09,
+                "niit_rate": 0.0,
+                "carry_forward_losses": float(body.carry_forward_losses or 0.0),
+            },
+            "explanation": "Fallback default tax profile because the AI response was invalid JSON.",
+        }
+        return fallback
+
+    return obj
+
+
 
 # -----------------------
 # AUTH ROUTES (public)
@@ -385,3 +489,75 @@ def harvest_candidates(
     rows.sort(key=lambda r: r.unrealized_loss, reverse=True)
     rows = [r for r in rows if r.unrealized_loss >= min_loss][:limit]
     return rows
+
+@app.post("/api/agent/chat", response_model=AgentChatOut)
+async def agent_chat(body: AgentChatIn, request: Request):
+    """
+    AI Tax Coach: takes a natural language question and uses your existing
+    portfolio endpoints as 'tools', then asks OpenAI to answer.
+    """
+    if not client:
+        return AgentChatOut(answer="Server is not configured with OPENAI_API_KEY.")
+
+    # Forward user's bearer token when calling internal endpoints
+    auth_header = request.headers.get("authorization")
+    headers: dict[str, str] = {}
+    if auth_header:
+        headers["authorization"] = auth_header
+
+    base_url = "http://127.0.0.1:8000"
+
+    # Call your existing endpoints as 'tools'
+    async with httpx.AsyncClient(base_url=base_url, timeout=10.0) as hc:
+        summary = None
+        holdings = []
+        harvest = []
+
+        try:
+            r_sum = await hc.get("/api/portfolio/summary", headers=headers)
+            if r_sum.status_code == 200:
+                summary = r_sum.json()
+        except Exception:
+            pass
+
+        try:
+            r_hold = await hc.get("/api/holdings", headers=headers)
+            if r_hold.status_code == 200:
+                holdings = r_hold.json()
+        except Exception:
+            pass
+
+        try:
+            r_harv = await hc.get("/api/harvest/candidates", headers=headers)
+            if r_harv.status_code == 200:
+                harvest = r_harv.json()
+        except Exception:
+            pass
+
+    holdings_snip = holdings[:20]
+    harvest_snip = harvest[:20]
+
+    system_instructions = (
+        "You are an AI Tax Coach embedded in a tax-aware portfolio dashboard. "
+        "You answer questions about the user's portfolio and taxes. "
+        "Use the JSON data I give you (summary, holdings, harvest candidates) "
+        "to ground your answer. Be clear, concise, and explain reasoning. "
+        "Always speak generally about taxes (this is not legal or tax advice)."
+    )
+
+    messages = [
+        {"role": "system", "content": system_instructions},
+        {"role": "system", "content": "Portfolio summary JSON:\n" + json.dumps(summary, default=str)},
+        {"role": "system", "content": "Holdings JSON (snippet):\n" + json.dumps(holdings_snip, default=str)},
+        {"role": "system", "content": "Harvest candidates JSON:\n" + json.dumps(harvest_snip, default=str)},
+        {"role": "user", "content": body.message},
+    ]
+
+    completion = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=messages,
+    )
+
+    answer = completion.choices[0].message.content or "Sorry, I couldn't generate a response."
+    return AgentChatOut(answer=answer)
+

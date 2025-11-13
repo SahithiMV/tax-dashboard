@@ -10,6 +10,18 @@ class TaxProfileIn(BaseModel):
     state_lt_rate: float
     niit_rate: float = 0.0
     carry_forward_losses: float = 0.0
+    
+class TaxProfileEstimateIn(BaseModel):
+    filing_status: Optional[str] = None  # "single", "married_joint", etc.
+    state_code: Optional[str] = None     # "CA", "NY", ...
+    income_band: Optional[str] = None    # "<50k", "50-100k", "100-200k", "200-500k", ">500k"
+    trading_style: Optional[str] = None  # "long_term", "short_term", "mixed"
+    carry_forward_losses: Optional[float] = 0.0
+    extra_notes: Optional[str] = None    # optional free text
+    
+class TaxProfileEstimateOut(BaseModel):
+    tax_profile: TaxProfileIn
+    explanation: str
 
 class LotIn(BaseModel):
     symbol: str

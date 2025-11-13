@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import "./App.css";
 import {
   api,
@@ -9,22 +9,13 @@ import {
   getSummary,
   getHarvestCandidates,
   whatIfSell,
+  agentChat,
+  estimateTaxProfile,
+  type TaxProfileIn,
+  type FilingStatus,
 } from "./api";
 import type { HarvestCandidate, LotResult, Summary, WhatIfSell } from "./types";
 import { isAxiosError } from "axios";
-
-/** local shape for the tax profile form */
-type FilingStatus = "single" | "married_joint" | "married_separate" | "head";
-type TaxProfileIn = {
-  filing_status: FilingStatus;
-  federal_st_rate: number;
-  federal_lt_rate: number;
-  state_code: string;
-  state_st_rate: number;
-  state_lt_rate: number;
-  niit_rate: number;
-  carry_forward_losses: number;
-};
 
 const defaultProfile: TaxProfileIn = {
   filing_status: "single",
@@ -39,7 +30,10 @@ const defaultProfile: TaxProfileIn = {
 
 function fmt(n?: number, p = 2) {
   if (n == null || Number.isNaN(n)) return "—";
-  return n.toLocaleString(undefined, { minimumFractionDigits: p, maximumFractionDigits: p });
+  return n.toLocaleString(undefined, {
+    minimumFractionDigits: p,
+    maximumFractionDigits: p,
+  });
 }
 
 export default function App() {
@@ -52,6 +46,16 @@ export default function App() {
   // profile
   const [profile, setProfile] = useState<TaxProfileIn>(defaultProfile);
   const [profMsg, setProfMsg] = useState<string>("");
+  const [profileExplain, setProfileExplain] = useState<string>("");
+
+  // guided AI setup
+  const [guidedIncomeBand, setGuidedIncomeBand] = useState<
+    "<50k" | "50-100k" | "100-200k" | "200-500k" | ">500k" | ""
+  >("");
+  const [guidedTradingStyle, setGuidedTradingStyle] = useState<
+    "long_term" | "short_term" | "mixed" | ""
+  >("");
+  const [guidedNotes, setGuidedNotes] = useState("");
 
   // data
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -62,6 +66,17 @@ export default function App() {
   // UI state
   const [busy, setBusy] = useState(false);
   const [netErr, setNetErr] = useState<string | null>(null);
+
+  // What-if inputs
+  const [sym, setSym] = useState("AAPL");
+  const [qty, setQty] = useState(5);
+
+  // AI agent
+  const [aiInput, setAiInput] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiMessages, setAiMessages] = useState<
+    { role: "user" | "assistant"; content: string }[]
+  >([]);
 
   useEffect(() => {
     // try to fetch /api/me if token exists (interceptor adds Authorization)
@@ -83,7 +98,11 @@ export default function App() {
       setLots(h);
       setHarvest(c);
     } catch (e) {
-      setNetErr(isAxiosError(e) ? (e.response?.data?.detail || e.message) : String(e));
+      setNetErr(
+        isAxiosError(e)
+          ? (e.response?.data?.detail || e.message)
+          : String(e),
+      );
     } finally {
       setBusy(false);
     }
@@ -91,7 +110,13 @@ export default function App() {
 
   const setDemoQuotes = async () => {
     // simple demo quotes you used before
-    await api.put("/api/quotes", { AAPL: 258.03, NVDA: 189.07, TSLA: 438.6, MSFT: 524.9, AMZN: 225.2 });
+    await api.put("/api/quotes", {
+      AAPL: 258.03,
+      NVDA: 189.07,
+      TSLA: 438.6,
+      MSFT: 524.9,
+      AMZN: 225.2,
+    });
   };
 
   const onFile = async (f: File | null) => {
@@ -104,7 +129,11 @@ export default function App() {
       await api.post("/api/import/csv", fd);
       await loadAll();
     } catch (e) {
-      setNetErr(isAxiosError(e) ? (e.response?.data?.detail || e.message) : String(e));
+      setNetErr(
+        isAxiosError(e)
+          ? (e.response?.data?.detail || e.message)
+          : String(e),
+      );
     } finally {
       setBusy(false);
     }
@@ -119,14 +148,48 @@ export default function App() {
       setProfMsg("Saved ✓");
     } catch (e) {
       setProfMsg("");
-      setNetErr(isAxiosError(e) ? (e.response?.data?.detail || e.message) : String(e));
+      setNetErr(
+        isAxiosError(e)
+          ? (e.response?.data?.detail || e.message)
+          : String(e),
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onEstimateProfile = async () => {
+    setBusy(true);
+    setProfMsg("");
+    setNetErr(null);
+    setProfileExplain("");
+    try {
+      const { tax_profile, explanation } = await estimateTaxProfile({
+        filing_status: profile.filing_status,
+        state_code: profile.state_code,
+        income_band: guidedIncomeBand || undefined,
+        trading_style: guidedTradingStyle || undefined,
+        carry_forward_losses: profile.carry_forward_losses,
+        extra_notes: guidedNotes || undefined,
+      });
+      setProfile(tax_profile);
+      setProfMsg("Estimated ✓");
+      setProfileExplain(explanation);
+    } catch (e) {
+      setNetErr(
+        isAxiosError(e)
+          ? (e.response?.data?.detail || e.message)
+          : String(e),
+      );
     } finally {
       setBusy(false);
     }
   };
 
   const authError = (e: unknown) =>
-    isAxiosError(e) ? (e.response?.data?.detail || e.message) : String(e);
+    isAxiosError(e)
+      ? (e.response?.data?.detail || e.message)
+      : String(e);
 
   const doSignup = async () => {
     setBusy(true);
@@ -135,7 +198,8 @@ export default function App() {
       await signup(email, pw);
       const m = await me();
       setUserEmail(m.email);
-      setEmail(""); setPw("");
+      setEmail("");
+      setPw("");
     } catch (e) {
       setNetErr(authError(e));
     } finally {
@@ -150,7 +214,8 @@ export default function App() {
       await login(email, pw);
       const m = await me();
       setUserEmail(m.email);
-      setEmail(""); setPw("");
+      setEmail("");
+      setPw("");
     } catch (e) {
       setNetErr(authError(e));
     } finally {
@@ -168,10 +233,6 @@ export default function App() {
     setWhat(null);
   };
 
-  // What-if inputs
-  const [sym, setSym] = useState("AAPL");
-  const [qty, setQty] = useState(5);
-
   const runWhatIf = async () => {
     setBusy(true);
     setNetErr(null);
@@ -179,13 +240,48 @@ export default function App() {
       const res = await whatIfSell(sym, qty);
       setWhat(res);
     } catch (e) {
-      setNetErr(isAxiosError(e) ? (e.response?.data?.detail || e.message) : String(e));
+      setNetErr(
+        isAxiosError(e)
+          ? (e.response?.data?.detail || e.message)
+          : String(e),
+      );
     } finally {
       setBusy(false);
     }
   };
 
-  const canLoad = authed;
+  const onAskAI = async () => {
+    const question = aiInput.trim();
+    if (!question) return;
+
+    setAiInput("");
+    setAiMessages((msgs) => [
+      ...msgs,
+      { role: "user", content: question },
+    ]);
+
+    try {
+      setAiBusy(true);
+      const { answer } = await agentChat(question);
+      setAiMessages((msgs) => [
+        ...msgs,
+        { role: "assistant", content: answer },
+      ]);
+    } catch (e) {
+      const msg = isAxiosError(e)
+        ? e.response?.data?.detail || e.message
+        : String(e);
+      setAiMessages((msgs) => [
+        ...msgs,
+        {
+          role: "assistant",
+          content: `Error from AI: ${msg}`,
+        },
+      ]);
+    } finally {
+      setAiBusy(false);
+    }
+  };
 
   return (
     <div className="app">
@@ -196,8 +292,12 @@ export default function App() {
           {authed ? (
             <>
               <span className="authtag">Signed in: {userEmail}</span>
-              <button className="btn" onClick={doLogout}>Logout</button>
-              <button className="btn" disabled={busy} onClick={loadAll}>Refresh</button>
+              <button className="btn" onClick={doLogout}>
+                Logout
+              </button>
+              <button className="btn" disabled={busy} onClick={loadAll}>
+                Refresh
+              </button>
             </>
           ) : (
             <>
@@ -214,8 +314,20 @@ export default function App() {
                 value={pw}
                 onChange={(e) => setPw(e.target.value)}
               />
-              <button className="btn primary" disabled={busy} onClick={doSignup}>Sign up</button>
-              <button className="btn" disabled={busy} onClick={doLogin}>Log in</button>
+              <button
+                className="btn primary"
+                disabled={busy}
+                onClick={doSignup}
+              >
+                Sign up
+              </button>
+              <button
+                className="btn"
+                disabled={busy}
+                onClick={doLogin}
+              >
+                Log in
+              </button>
             </>
           )}
         </div>
@@ -227,8 +339,13 @@ export default function App() {
           <div className="stack-sm">
             <div>1. Sign up or log in.</div>
             <div>2. Save your tax profile.</div>
-            <div>3. Import your holdings CSV and click <b>Set demo quotes</b>.</div>
-            <div>4. View summary & holdings, harvest ideas, and run a what-if sell.</div>
+            <div>
+              3. Import your holdings CSV and click <b>Set demo quotes</b>.
+            </div>
+            <div>
+              4. View summary &amp; holdings, harvest ideas, and run a
+              what-if sell.
+            </div>
           </div>
         </div>
       )}
@@ -242,13 +359,108 @@ export default function App() {
           {authed && <span className="chip">{profMsg || " "}</span>}
         </div>
 
-        <div className="row" style={{marginBottom:12}}>
+        {/* Smart setup helper */}
+        <div className="card" style={{ marginBottom: 12 }}>
+          <h4 className="card-title">Smart tax profile setup (AI)</h4>
+          <p className="hint">
+            Answer a few quick questions and let AI estimate reasonable tax
+            rates for simulations. You can always tweak the numbers manually.
+            This is for planning only — not tax advice.
+          </p>
+
+          <div
+            className="row"
+            style={{ marginBottom: 8, flexWrap: "wrap", gap: 8 }}
+          >
+            <label className="inline">
+              Income band
+              <select
+                className="select"
+                value={guidedIncomeBand}
+                onChange={(e) =>
+                  setGuidedIncomeBand(
+                    e.target.value as
+                      | "<50k"
+                      | "50-100k"
+                      | "100-200k"
+                      | "200-500k"
+                      | ">500k"
+                      | "",
+                  )
+                }
+              >
+                <option value="">Select...</option>
+                <option value="<50k">&lt; $50k</option>
+                <option value="50-100k">$50k – $100k</option>
+                <option value="100-200k">$100k – $200k</option>
+                <option value="200-500k">$200k – $500k</option>
+                <option value=">500k">&gt; $500k</option>
+              </select>
+            </label>
+
+            <label className="inline">
+              Investing style
+              <select
+                className="select"
+                value={guidedTradingStyle}
+                onChange={(e) =>
+                  setGuidedTradingStyle(
+                    e.target.value as "long_term" | "short_term" | "mixed" | "",
+                  )
+                }
+              >
+                <option value="">Select...</option>
+                <option value="long_term">Mostly long-term holds</option>
+                <option value="short_term">Mostly short-term trading</option>
+                <option value="mixed">Mixed / not sure</option>
+              </select>
+            </label>
+          </div>
+
+          <textarea
+            className="input"
+            style={{ width: "100%", minHeight: 60 }}
+            placeholder={
+              'Optional: add notes like "180k W2 income in CA, some RSUs, no big loss carryovers".\n' +
+              "Helpful details:\n" +
+              "• Rough total income (salary + bonuses + investment income)\n" +
+              "• Whether you expect NIIT (high income / lots of investment income)\n" +
+              "• Any capital loss carryforwards you know about"
+            }
+            value={guidedNotes}
+            onChange={(e) => setGuidedNotes(e.target.value)}
+          />
+
+          <div className="row" style={{ marginTop: 8 }}>
+            <button
+              className="btn"
+              disabled={!authed || busy}
+              onClick={onEstimateProfile}
+            >
+              Estimate tax profile with AI
+            </button>
+          </div>
+
+          {profileExplain && (
+            <div className="hint" style={{ marginTop: 8 }}>
+              <b>AI rationale:</b> {profileExplain}
+            </div>
+          )}
+        </div>
+
+        {/* Manual details (auto-filled by AI or user) */}
+        <div className="row" style={{ marginBottom: 12 }}>
           <label className="inline">
             Filing status
             <select
               className="select"
               value={profile.filing_status}
-              onChange={(e) => setProfile(p => ({ ...p, filing_status: e.target.value as FilingStatus }))}
+              onChange={(e) =>
+                setProfile((p) => ({
+                  ...p,
+                  filing_status: e.target.value as FilingStatus,
+                }))
+              }
             >
               <option value="single">single</option>
               <option value="married_joint">married_joint</option>
@@ -257,73 +469,177 @@ export default function App() {
             </select>
           </label>
 
-          <label className="inline">State code
-            <input className="input small" value={profile.state_code}
-              onChange={(e)=>setProfile(p=>({...p, state_code:e.target.value.toUpperCase().slice(0,2)}))}/>
+          <label className="inline">
+            State code
+            <input
+              className="input small"
+              value={profile.state_code}
+              onChange={(e) =>
+                setProfile((p) => ({
+                  ...p,
+                  state_code: e.target.value.toUpperCase().slice(0, 2),
+                }))
+              }
+            />
           </label>
 
-          <label className="inline">Fed ST rate
-            <input className="input small" type="number" step="0.001"
+          <label className="inline">
+            Fed ST rate
+            <input
+              className="input small"
+              type="number"
+              step="0.001"
               value={profile.federal_st_rate}
-              onChange={(e)=>setProfile(p=>({...p, federal_st_rate:+e.target.value}))}/>
+              onChange={(e) =>
+                setProfile((p) => ({
+                  ...p,
+                  federal_st_rate: +e.target.value,
+                }))
+              }
+            />
           </label>
 
-          <label className="inline">Fed LT rate
-            <input className="input small" type="number" step="0.001"
+          <label className="inline">
+            Fed LT rate
+            <input
+              className="input small"
+              type="number"
+              step="0.001"
               value={profile.federal_lt_rate}
-              onChange={(e)=>setProfile(p=>({...p, federal_lt_rate:+e.target.value}))}/>
+              onChange={(e) =>
+                setProfile((p) => ({
+                  ...p,
+                  federal_lt_rate: +e.target.value,
+                }))
+              }
+            />
           </label>
 
-          <label className="inline">State ST rate
-            <input className="input small" type="number" step="0.001"
+          <label className="inline">
+            State ST rate
+            <input
+              className="input small"
+              type="number"
+              step="0.001"
               value={profile.state_st_rate}
-              onChange={(e)=>setProfile(p=>({...p, state_st_rate:+e.target.value}))}/>
+              onChange={(e) =>
+                setProfile((p) => ({
+                  ...p,
+                  state_st_rate: +e.target.value,
+                }))
+              }
+            />
           </label>
 
-          <label className="inline">State LT rate
-            <input className="input small" type="number" step="0.001"
+          <label className="inline">
+            State LT rate
+            <input
+              className="input small"
+              type="number"
+              step="0.001"
               value={profile.state_lt_rate}
-              onChange={(e)=>setProfile(p=>({...p, state_lt_rate:+e.target.value}))}/>
+              onChange={(e) =>
+                setProfile((p) => ({
+                  ...p,
+                  state_lt_rate: +e.target.value,
+                }))
+              }
+            />
           </label>
 
-          <label className="inline">NIIT rate
-            <input className="input small" type="number" step="0.001"
+          <label className="inline">
+            NIIT rate
+            <input
+              className="input small"
+              type="number"
+              step="0.001"
               value={profile.niit_rate}
-              onChange={(e)=>setProfile(p=>({...p, niit_rate:+e.target.value}))}/>
+              onChange={(e) =>
+                setProfile((p) => ({
+                  ...p,
+                  niit_rate: +e.target.value,
+                }))
+              }
+            />
           </label>
 
-          <label className="inline">Carry-forward losses
-            <input className="input small" type="number" step="1"
+          <label className="inline">
+            Carry-forward losses
+            <input
+              className="input small"
+              type="number"
+              step="1"
               value={profile.carry_forward_losses}
-              onChange={(e)=>setProfile(p=>({...p, carry_forward_losses:+e.target.value}))}/>
+              onChange={(e) =>
+                setProfile((p) => ({
+                  ...p,
+                  carry_forward_losses: +e.target.value,
+                }))
+              }
+            />
           </label>
         </div>
 
         <div className="row">
-          <button className="btn primary" disabled={!authed || busy} onClick={onSaveProfile}>Save profile</button>
-          <button className="btn" disabled={!authed || busy} onClick={async ()=>{
-            try{
-              const { data } = await api.get("/api/tax_profile");
-              setProfile(data as TaxProfileIn);
-              setProfMsg("Loaded.");
-            }catch(e){ setProfMsg(isAxiosError(e)?(e.response?.data?.detail || e.message):String(e)); }
-          }}>Load existing</button>
+          <button
+            className="btn primary"
+            disabled={!authed || busy}
+            onClick={onSaveProfile}
+          >
+            Save profile
+          </button>
+          <button
+            className="btn"
+            disabled={!authed || busy}
+            onClick={async () => {
+              try {
+                const data = await api.get("/api/tax_profile").then((r) => r.data);
+                setProfile(data as TaxProfileIn);
+                setProfMsg("Loaded.");
+              } catch (e) {
+                setProfMsg(
+                  isAxiosError(e)
+                    ? e.response?.data?.detail || e.message
+                    : String(e),
+                );
+              }
+            }}
+          >
+            Load existing
+          </button>
         </div>
       </section>
 
       {/* Import + demo quotes */}
       <section className="section">
         <h3 className="section-title">2. Import holdings CSV & set demo quotes</h3>
-        <div className="row" style={{marginBottom:8}}>
+        <div className="row" style={{ marginBottom: 8 }}>
           <label className="file">
-            <input type="file" accept=".csv" onChange={(e)=>onFile(e.target.files?.[0] ?? null)}/>
+            <input
+              type="file"
+              accept=".csv"
+              onChange={(e) => onFile(e.target.files?.[0] ?? null)}
+            />
             <span className="btn">Choose file</span>
           </label>
-          <button className="btn" disabled={!authed || busy} onClick={setDemoQuotes}>Set demo quotes</button>
-          <button className="btn" disabled={!authed || busy} onClick={loadAll}>Refresh</button>
+          <button
+            className="btn"
+            disabled={!authed || busy}
+            onClick={setDemoQuotes}
+          >
+            Set demo quotes
+          </button>
+          <button
+            className="btn"
+            disabled={!authed || busy}
+            onClick={loadAll}
+          >
+            Refresh
+          </button>
         </div>
         <div className="hint">
-          Use your CSV like <code>server/data/holdings.example.csv</code>. Demo quotes: AAPL, MSFT, AMZN, NVDA, TSLA.
+          Use your CSV like <code>server/data/holdings.example.csv</code>.
+          Demo quotes: AAPL, MSFT, AMZN, NVDA, TSLA.
         </div>
       </section>
 
@@ -337,29 +653,46 @@ export default function App() {
             <div className="stats">
               <div className="stat">
                 <div className="label">Pre-Tax Value</div>
-                <div className="value">${fmt(summary.pre_tax_value)}</div>
+                <div className="value">
+                  ${fmt(summary.pre_tax_value)}
+                </div>
               </div>
               <div className="stat">
                 <div className="label">Unrealized Gain</div>
-                <div className="value {summary.total_unrealized_gain>=0?'positive':'negative'}">
+                <div
+                  className={
+                    "value " +
+                    (summary.total_unrealized_gain >= 0
+                      ? "positive"
+                      : "negative")
+                  }
+                >
                   ${fmt(summary.total_unrealized_gain)}
                 </div>
               </div>
               <div className="stat">
                 <div className="label">Gross Tax on Gains</div>
-                <div className="value">${fmt(summary.gross_tax_on_gains)}</div>
+                <div className="value">
+                  ${fmt(summary.gross_tax_on_gains)}
+                </div>
               </div>
               <div className="stat">
                 <div className="label">Potential Loss Savings</div>
-                <div className="value">${fmt(summary.gross_potential_savings_on_losses)}</div>
+                <div className="value">
+                  ${fmt(summary.gross_potential_savings_on_losses)}
+                </div>
               </div>
               <div className="stat">
                 <div className="label">Net Tax (naive)</div>
-                <div className="value">${fmt(summary.naive_net_tax_if_liquidated_now)}</div>
+                <div className="value">
+                  ${fmt(summary.naive_net_tax_if_liquidated_now)}
+                </div>
               </div>
               <div className="stat">
                 <div className="label">After-Tax Value Now</div>
-                <div className="value">${fmt(summary.after_tax_value_if_liquidated_now)}</div>
+                <div className="value">
+                  ${fmt(summary.after_tax_value_if_liquidated_now)}
+                </div>
               </div>
             </div>
           )}
@@ -368,15 +701,91 @@ export default function App() {
         <div>
           <h3 className="section-title">What-If: Sell (FIFO)</h3>
           <div className="whatif">
-            <input className="input small" value={sym} onChange={(e)=>setSym(e.target.value.toUpperCase())}/>
-            <input className="input small" type="number" value={qty} onChange={(e)=>setQty(+e.target.value||0)}/>
-            <button className="btn" disabled={!authed || busy} onClick={runWhatIf}>Run</button>
+            <input
+              className="input small"
+              value={sym}
+              onChange={(e) => setSym(e.target.value.toUpperCase())}
+            />
+            <input
+              className="input small"
+              type="number"
+              value={qty}
+              onChange={(e) => setQty(+e.target.value || 0)}
+            />
+            <button
+              className="btn"
+              disabled={!authed || busy}
+              onClick={runWhatIf}
+            >
+              Run
+            </button>
           </div>
           {what && (
-            <div className="banner" style={{marginTop:12}}>
-              Sell {what.sell_quantity} {what.symbol} @ ${fmt(what.asof_price)} — realized gain ${fmt(what.realized_gain)}, est. tax ${fmt(what.est_tax)}
+            <div className="banner" style={{ marginTop: 12 }}>
+              Sell {what.sell_quantity} {what.symbol} @ $
+              {fmt(what.asof_price)} — realized gain $
+              {fmt(what.realized_gain)}, est. tax $
+              {fmt(what.est_tax)}
             </div>
           )}
+        </div>
+      </section>
+
+      {/* AI Tax Coach */}
+      <section className="section">
+        <h3 className="section-title">AI Tax Coach (LLM)</h3>
+        <div
+          className="table-wrap"
+          style={{ maxHeight: 260, overflowY: "auto", marginBottom: 8 }}
+        >
+          {aiMessages.length === 0 && (
+            <div className="muted">
+              Ask a question like:
+              <br />
+              • “Explain my tax exposure right now”
+              <br />
+              • “How can I harvest about $3,000 in losses?”
+              <br />
+              • “Which holdings contribute most to my tax bill?”
+            </div>
+          )}
+
+          {aiMessages.map((m, i) => (
+            <div key={i} style={{ marginBottom: 8 }}>
+              <div className="muted" style={{ fontSize: 12 }}>
+                {m.role === "user" ? "You" : "Assistant"}
+              </div>
+              <div>{m.content}</div>
+            </div>
+          ))}
+        </div>
+
+        <div className="row">
+          <input
+            className="input medium"
+            placeholder='e.g. "How can I minimize taxes if I need $5,000 cash?"'
+            value={aiInput}
+            onChange={(e) => setAiInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                onAskAI();
+              }
+            }}
+          />
+          <button
+            className="btn primary"
+            disabled={!authed || aiBusy}
+            onClick={onAskAI}
+          >
+            {aiBusy ? "Thinking..." : "Ask AI"}
+          </button>
+        </div>
+        <div className="hint">
+          The agent can see your tax profile, portfolio summary, holdings,
+          and harvest candidates. It uses that data plus an OpenAI model to
+          explain your portfolio and suggest tax-aware moves. This is
+          educational, not tax advice.
         </div>
       </section>
 
@@ -403,18 +812,18 @@ export default function App() {
                 </tr>
               </thead>
               <tbody>
-                {lots.map((r, i)=>(
+                {lots.map((r, i) => (
                   <tr key={i}>
                     <td>{r.symbol}</td>
-                    <td className="num">{fmt(r.quantity,0)}</td>
+                    <td className="num">{fmt(r.quantity, 0)}</td>
                     <td className="num">{fmt(r.price)}</td>
                     <td className="num">{fmt(r.cost_per_share)}</td>
                     <td className="num">{fmt(r.unrealized_gain)}</td>
                     <td className="term">{r.term}</td>
-                    <td className="num">{fmt(r.holding_days,0)}</td>
+                    <td className="num">{fmt(r.holding_days, 0)}</td>
                     <td className="num">{fmt(r.est_tax_liability)}</td>
                     <td className="num">{fmt(r.after_tax_value)}</td>
-                    <td className="num">{fmt(r.days_to_lt,0)}</td>
+                    <td className="num">{fmt(r.days_to_lt, 0)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -443,15 +852,15 @@ export default function App() {
                 </tr>
               </thead>
               <tbody>
-                {harvest.map((h, i)=>(
+                {harvest.map((h, i) => (
                   <tr key={i}>
                     <td>{h.symbol}</td>
                     <td className="num">{h.lot_id ?? "-"}</td>
-                    <td className="num">{fmt(h.quantity,0)}</td>
+                    <td className="num">{fmt(h.quantity, 0)}</td>
                     <td className="num">{fmt(h.cost_per_share)}</td>
                     <td className="num">{fmt(h.price)}</td>
                     <td className="num">{fmt(h.unrealized_loss)}</td>
-                    <td className="num">{fmt(h.days_to_lt,0)}</td>
+                    <td className="num">{fmt(h.days_to_lt, 0)}</td>
                   </tr>
                 ))}
               </tbody>
